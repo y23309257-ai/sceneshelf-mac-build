@@ -27,7 +27,7 @@ jobs:
           curl --fail --location --retry 2 --max-time 180 \
             https://scene-shelf-pc.gooo22.chatgpt.site/SceneShelf-Mac-PKG-BuildKit.zip \
             -o kit.zip
-          echo '9a282a973b203e4c02d85bf7e8161af224ea95ece092165581671c6342148909  kit.zip' | shasum -a 256 -c -
+          echo '7039638f88c74742f2248a35f423e34cc5fe8e3ced7289840dd17d95ac65e670  kit.zip' | shasum -a 256 -c -
           unzip -q kit.zip
       - name: Build the native installer without interactive prompts
         shell: bash
