@@ -16,6 +16,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
+      - name: Read the build recipe
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
       - name: Download and verify the published build kit
         shell: bash
         run: |
@@ -29,11 +33,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cp build-package.sh SceneShelf-Mac-PKG-BuildKit/Build-CI.command
           cd SceneShelf-Mac-PKG-BuildKit
-          # The kit's Finder reveal and terminal pause are for a human builder.
-          sed -e '/^trap /d' -e '\|^/usr/bin/open -R |d' -e '/^read -r -p /d' \
-            Build-SceneShelf-PKG.command > Build-CI.command
-          bash Build-CI.command
+          CI=true bash Build-CI.command
           mkdir -p ../artifacts
           package=$(find . -name 'SceneShelf-Mac-${{ matrix.arch }}.pkg' -type f)
           test -n "$package"
