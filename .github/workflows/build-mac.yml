@@ -1,0 +1,52 @@
+name: Build SceneShelf Mac installers
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - name: Download and verify the published build kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 --max-time 180 \
+            https://scene-shelf-pc.gooo22.chatgpt.site/SceneShelf-Mac-PKG-BuildKit.zip \
+            -o kit.zip
+          echo 'caeb08d8e6e1593ad46610a88a48a9371bd811588c7747f447a7df00166e59d5  kit.zip' | shasum -a 256 -c -
+          unzip -q kit.zip
+      - name: Build the native installer without interactive prompts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd SceneShelf-Mac-PKG-BuildKit
+          # The kit's Finder reveal and terminal pause are for a human builder.
+          sed -e '/^trap /d' -e '\|^/usr/bin/open -R |d' -e '/^read -r -p /d' \
+            Build-SceneShelf-PKG.command > Build-CI.command
+          bash Build-CI.command
+          mkdir -p ../artifacts
+          package=$(find . -name 'SceneShelf-Mac-${{ matrix.arch }}.pkg' -type f)
+          test -n "$package"
+          pkgutil --payload-files "$package" | tee ../artifacts/payload-${{ matrix.arch }}.txt
+          grep -q 'server.mjs' ../artifacts/payload-${{ matrix.arch }}.txt
+          grep -q 'mac-launcher.mjs' ../artifacts/payload-${{ matrix.arch }}.txt
+          cp "$package" ../artifacts/
+          cd ../artifacts
+          shasum -a 256 SceneShelf-Mac-${{ matrix.arch }}.pkg > SceneShelf-Mac-${{ matrix.arch }}.pkg.sha256
+      - name: Save installer artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: SceneShelf-Mac-${{ matrix.arch }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7
