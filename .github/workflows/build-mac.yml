@@ -43,6 +43,28 @@ jobs:
           cp "$package" ../artifacts/
           cd ../artifacts
           shasum -a 256 SceneShelf-Mac-${{ matrix.arch }}.pkg > SceneShelf-Mac-${{ matrix.arch }}.pkg.sha256
+      - name: Prepare Node.js for installation checks
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.2'
+      - name: Install and check the native runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo /usr/sbin/installer -pkg artifacts/SceneShelf-Mac-${{ matrix.arch }}.pkg -target /
+          cd /Applications/SceneShelf.app/Contents/Resources/runtime
+          test "$(node -p process.arch)" = '${{ matrix.arch }}'
+          node --input-type=module -e "import sharp from 'sharp'; const p=await sharp({create:{width:2,height:2,channels:3,background:'#123456'}}).png().toBuffer(); if(!p.length) throw Error('Image runtime failed'); console.log('Native image processing OK');"
+          SCENESHELF_STORAGE="$RUNNER_TEMP/sceneshelf-test-data" PORT=4398 node server.mjs > "$RUNNER_TEMP/sceneshelf-server.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4398/api/health > "$RUNNER_TEMP/health.json"; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/sceneshelf-server.log"; exit 1; fi
+            sleep 1
+          done
+          node --input-type=module -e "import fs from 'node:fs'; const h=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/health.json','utf8')); if(h.app!=='SceneShelf'||h.bridgeVersion!==2) throw Error('Unexpected health response'); console.log('Server health OK');"
+          curl --fail --silent http://127.0.0.1:4398/ | grep -q '<!doctype html>'
       - name: Save installer artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
