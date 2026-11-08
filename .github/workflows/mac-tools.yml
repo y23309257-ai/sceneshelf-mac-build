@@ -1,0 +1,130 @@
+name: Build and check Mac helper tools
+# Builds whisper-cli for each Mac architecture, checks the third-party Mac tools SceneShelf downloads,
+# and publishes the whisper binaries (with checksums) as a release of this public recipe repository.
+on:
+  workflow_dispatch:
+    inputs:
+      voice:
+        description: Also test the local voice engine install on Apple Silicon (slow, ~6GB)
+        type: boolean
+        default: false
+permissions:
+  contents: write
+env:
+  WHISPER_REF: b5454
+  FFMPEG_TAG: b6.1.1
+  REALESRGAN_URL: https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
+  RELEASE_TAG: mac-tools-1
+jobs:
+  tools:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+            cmake: -DGGML_NATIVE=OFF
+          - runner: macos-15-intel
+            arch: x64
+            cmake: -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: FFmpeg (static build with libx264)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ff && cd ff
+          for t in ffmpeg ffprobe; do
+            curl --fail --location --retry 2 -o "$t.gz" "https://github.com/eugeneware/ffmpeg-static/releases/download/$FFMPEG_TAG/$t-darwin-${{ matrix.arch }}.gz"
+            echo "SHA $t-darwin-${{ matrix.arch }}.gz $(shasum -a 256 "$t.gz" | cut -d' ' -f1) $(stat -f %z "$t.gz")"
+            gunzip -k "$t.gz" && chmod +x "$t"
+            echo "OTOOL $t"; otool -L "$t"
+          done
+          ./ffmpeg -hide_banner -version | head -1
+          ./ffmpeg -hide_banner -encoders | grep -E ' libx264 ' && echo "X264 OK"
+          ./ffmpeg -hide_banner -f lavfi -i testsrc=size=320x240:rate=24 -f lavfi -i sine -t 2 -c:v libx264 -c:a aac -shortest -y t.mp4
+          ./ffprobe -hide_banner -v error -show_entries format=duration -of csv=p=0 t.mp4
+      - name: Real-ESRGAN (official macOS build)
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 -o re.zip "$REALESRGAN_URL"
+          echo "SHA realesrgan-macos.zip $(shasum -a 256 re.zip | cut -d' ' -f1) $(stat -f %z re.zip)"
+          unzip -o -q re.zip -d re && find re -maxdepth 2 | head -40
+          exe=$(find re -name realesrgan-ncnn-vulkan -type f | head -1); chmod +x "$exe"
+          echo "LIPO $(lipo -info "$exe")"; otool -L "$exe"
+          ff/ffmpeg -hide_banner -f lavfi -i testsrc=size=64x64 -frames:v 1 -y in.png
+          "$exe" -i in.png -o out.png -n realesr-animevideov3 -s 2 -m "$(dirname "$exe")/models" && file out.png && echo "UPSCALE OK"
+      - name: whisper-cli build
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp wc
+          cmake -S wc -B wc/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON -DGGML_BLAS=ON -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 ${{ matrix.cmake }}
+          cmake --build wc/build --config Release -j 4 --target whisper-cli
+          out="whisper-cli-$WHISPER_REF-darwin-${{ matrix.arch }}"
+          cp wc/build/bin/whisper-cli "$out" && strip -x "$out" && codesign --force --sign - "$out"
+          echo "OTOOL whisper"; otool -L "$out"
+          if otool -L "$out" | tail -n +2 | grep -vE '/System/Library/|/usr/lib/'; then echo "non-system library linked"; exit 1; fi
+          echo "SHA $out $(shasum -a 256 "$out" | cut -d' ' -f1) $(stat -f %z "$out")"
+          echo "WHISPER_BIN=$out" >> "$GITHUB_ENV"
+      - name: whisper-cli Korean transcription test
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 2 -o tiny.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
+          say -v Yuna "안녕하세요. 오늘은 날씨가 정말 좋네요." -o ko.aiff || say "Hello, the weather is really nice today." -o ko.aiff
+          ff/ffmpeg -hide_banner -y -i ko.aiff -ar 16000 -ac 1 -c:a pcm_s16le ko.wav
+          ./"$WHISPER_BIN" -m tiny.bin -f ko.wav -l ko -oj -of res -np -sns -ml 1 -sow -t 4
+          head -c 600 res.json; echo
+          ./"$WHISPER_BIN" -m tiny.bin -f ko.wav -l ko -np -ng -t 4 | head -5
+      - name: uv and Python
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.arch }}" = arm64 ]; then w=uv-0.13.4-py3-none-macosx_11_0_arm64.whl; u=https://files.pythonhosted.org/packages/26/44/5a8733dd1b2e8d6f9cffd1ff6428a3e11dcc7e146a7657e32cfb8d9fb4a4/$w; s=95f4eb2b991b53b50ec2b18ab612fca8ba1e7a75a47af0331fb8bcd21da3eb03;
+          else w=uv-0.13.4-py3-none-macosx_10_12_x86_64.whl; u=https://files.pythonhosted.org/packages/21/f2/0cb77a1ae43959772f8f7873eb1f4061907fbb1694ce55c79b231f639b1d/$w; s=b4bbacea78c9db136cd2ec3147cbfd9ed910b4db5e1877109bd74d0e73bb2eaf; fi
+          curl --fail --location -o "$w" "$u" && echo "$s  $w" | shasum -a 256 -c -
+          unzip -o -q "$w" -d uvw && uv=$(find uvw -path '*scripts/uv' -type f) && chmod +x "$uv" && "$uv" --version && echo "UV_ENTRY $uv"
+          "$uv" venv --python 3.11 --seed venv && venv/bin/python -c "import platform,sys; print(sys.version, platform.machine())"
+          "$uv" pip install --python venv/bin/python --dry-run torch==2.6.0 torchaudio==2.6.0 && echo "TORCH 2.6 OK" || echo "TORCH 2.6 NOT AVAILABLE"
+      - name: Keychain (store, read, delete a test value without command-line secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          hex=$(printf 'sk-test-123"$x' | xxd -p | tr -d '\n')
+          printf 'add-generic-password -U -s SceneShelf-ci -a apimart -X %s\n' "$hex" | security -i
+          got=$(security find-generic-password -s SceneShelf-ci -a apimart -w)
+          [ "$got" = 'sk-test-123"$x' ] && echo "KEYCHAIN OK"
+          security delete-generic-password -s SceneShelf-ci -a apimart >/dev/null
+      - name: Publish whisper binary
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "Mac helper tools" --notes "whisper-cli ($WHISPER_REF) built from ggml-org/whisper.cpp (MIT) for SceneShelf on macOS. Checksums are pinned in the app." || true
+          gh release upload "$RELEASE_TAG" "$WHISPER_BIN" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size) \(.url)"'
+  voice:
+    if: ${{ inputs.voice }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Local voice engine install check (Apple Silicon, CPU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          w=uv-0.13.4-py3-none-macosx_11_0_arm64.whl
+          curl --fail --location -o "$w" https://files.pythonhosted.org/packages/26/44/5a8733dd1b2e8d6f9cffd1ff6428a3e11dcc7e146a7657e32cfb8d9fb4a4/$w
+          echo "95f4eb2b991b53b50ec2b18ab612fca8ba1e7a75a47af0331fb8bcd21da3eb03  $w" | shasum -a 256 -c -
+          unzip -o -q "$w" -d uvw && uv=$(find uvw -path '*scripts/uv' -type f) && chmod +x "$uv"
+          "$uv" venv --python 3.11 --seed venv
+          "$uv" pip install --python venv/bin/python torch==2.6.0 torchaudio==2.6.0
+          "$uv" pip install --python venv/bin/python chatterbox-tts==0.1.7 --no-deps
+          "$uv" pip install --python venv/bin/python 'setuptools<81' 'numpy>=1.24,<2' librosa==0.11.0 s3tokenizer transformers==5.2.0 diffusers==0.29.0 'resemble-perth>=1.0.0' conformer==0.3.2 safetensors==0.5.3 spacy-pkuseg pykakasi==2.3.0 pyloudnorm omegaconf huggingface_hub demucs==4.1.0
+          venv/bin/python -c "import torch, demucs, chatterbox; from chatterbox.mtl_tts import ChatterboxMultilingualTTS; import perth; print('VOICE IMPORT OK', torch.__version__, torch.backends.mps.is_available())"
+          du -sh venv
