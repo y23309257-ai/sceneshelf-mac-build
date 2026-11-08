@@ -27,15 +27,15 @@ jobs:
           curl --fail --location --retry 2 --max-time 180 \
             https://scene-shelf-pc.gooo22.chatgpt.site/SceneShelf-Mac-PKG-BuildKit.zip \
             -o kit.zip
-          echo '7039638f88c74742f2248a35f423e34cc5fe8e3ced7289840dd17d95ac65e670  kit.zip' | shasum -a 256 -c -
+          echo 'd7eddd800c0709142a0c55c05d10111405e929fdd1fbd9baae3e5921c4590f16  kit.zip' | shasum -a 256 -c -
           unzip -q kit.zip
       - name: Build the native installer without interactive prompts
         shell: bash
         run: |
           set -euo pipefail
-          cp build-package.sh SceneShelf-Mac-PKG-BuildKit/Build-CI.command
+          # The kit's own script carries the app version (0.6+); build-package.sh is kept only for old kits.
           cd SceneShelf-Mac-PKG-BuildKit
-          CI=true bash Build-CI.command
+          CI=true bash Build-SceneShelf-PKG.command
           mkdir -p ../artifacts
           package=$(find . -name 'SceneShelf-Mac-${{ matrix.arch }}.pkg' -type f)
           test -n "$package"
