@@ -14,7 +14,7 @@ jobs:
           - runner: macos-15-intel
             arch: x64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - name: Read the build recipe
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -27,7 +27,7 @@ jobs:
           curl --fail --location --retry 2 --max-time 180 \
             https://scene-shelf-pc.gooo22.chatgpt.site/SceneShelf-Mac-PKG-BuildKit.zip \
             -o kit.zip
-          echo 'd7eddd800c0709142a0c55c05d10111405e929fdd1fbd9baae3e5921c4590f16  kit.zip' | shasum -a 256 -c -
+          echo 'b9b4545523f9693c2e701a2b10760bfdd11306ea0ff14e1dc4ae23efebd8fd0b  kit.zip' | shasum -a 256 -c -
           unzip -q kit.zip
       - name: Build the native installer without interactive prompts
         shell: bash
@@ -67,6 +67,23 @@ jobs:
           done
           node --input-type=module -e "import fs from 'node:fs'; const h=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/health.json','utf8')); if(h.app!=='SceneShelf'||h.bridgeVersion!==2) throw Error('Unexpected health response'); console.log('Server health OK');"
           curl --fail --silent http://127.0.0.1:4398/ | grep -q '<!doctype html>'
+          # 0.6.2+: the app downloads its Mac helper tools on first launch (FFmpeg, Whisper, Real-ESRGAN). Check they arrive and run.
+          tools="$RUNNER_TEMP/sceneshelf-test-data/tools"
+          if grep -q 'whisper-cli-b5454-darwin' server.mjs; then
+            for attempt in {1..150}; do
+              if [ -x "$tools/ffmpeg/ffmpeg" ] && [ -x "$tools/ffmpeg/ffprobe" ] && [ -x "$tools/whisper/whisper-cli" ] && [ -f "$tools/whisper/ggml-large-v3-turbo-q5_0.bin" ] && [ -x "$tools/realesrgan/realesrgan-ncnn-vulkan" ]; then break; fi
+              if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/sceneshelf-server.log"; exit 1; fi
+              sleep 8
+            done
+            ls -la "$tools"/*/ | head -40
+            "$tools/ffmpeg/ffmpeg" -hide_banner -encoders | grep ' libx264 ' && echo "FFMPEG OK"
+            say -v Yuna "안녕하세요. 오늘은 날씨가 정말 좋네요." -o "$RUNNER_TEMP/ko.aiff"
+            "$tools/ffmpeg/ffmpeg" -hide_banner -loglevel error -y -i "$RUNNER_TEMP/ko.aiff" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/ko.wav"
+            "$tools/whisper/whisper-cli" -m "$tools/whisper/ggml-large-v3-turbo-q5_0.bin" -f "$RUNNER_TEMP/ko.wav" -l ko -np -t 4 | tee "$RUNNER_TEMP/ko.txt"
+            grep -q '날씨' "$RUNNER_TEMP/ko.txt" && echo "WHISPER OK"
+            "$tools/ffmpeg/ffmpeg" -hide_banner -loglevel error -f lavfi -i testsrc=size=64x64 -frames:v 1 -y "$RUNNER_TEMP/in.png"
+            "$tools/realesrgan/realesrgan-ncnn-vulkan" -i "$RUNNER_TEMP/in.png" -o "$RUNNER_TEMP/out.png" -n realesr-animevideov3 -s 2 -m "$tools/realesrgan/models" && file "$RUNNER_TEMP/out.png" | grep -q '128 x 128' && echo "UPSCALE OK"
+          fi
       - name: Save installer artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
