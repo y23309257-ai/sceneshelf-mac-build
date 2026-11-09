@@ -69,19 +69,25 @@ jobs:
           curl --fail --silent http://127.0.0.1:4398/ | grep -q '<!doctype html>'
           # 0.6.2+: the app downloads its Mac helper tools on first launch (FFmpeg, Whisper, Real-ESRGAN). Check they arrive and run.
           tools="$RUNNER_TEMP/sceneshelf-test-data/tools"
+          # The app reuses a suitable FFmpeg already installed on the runner.
+          ffmpeg_bin="$tools/ffmpeg/ffmpeg"
+          ffprobe_bin="$tools/ffmpeg/ffprobe"
+          if [ ! -x "$ffmpeg_bin" ] && command -v ffmpeg >/dev/null; then ffmpeg_bin="$(command -v ffmpeg)"; fi
+          if [ ! -x "$ffprobe_bin" ] && command -v ffprobe >/dev/null; then ffprobe_bin="$(command -v ffprobe)"; fi
+          printf 'Selected FFmpeg: %s\nSelected ffprobe: %s\n' "$ffmpeg_bin" "$ffprobe_bin"
           if grep -q 'whisper-cli-b5454-darwin' server.mjs; then
             for attempt in {1..150}; do
-              if [ -x "$tools/ffmpeg/ffmpeg" ] && [ -x "$tools/ffmpeg/ffprobe" ] && [ -x "$tools/whisper/whisper-cli" ] && [ -f "$tools/whisper/ggml-large-v3-turbo-q5_0.bin" ] && [ -x "$tools/realesrgan/realesrgan-ncnn-vulkan" ]; then break; fi
+              if [ -x "$ffmpeg_bin" ] && [ -x "$ffprobe_bin" ] && [ -x "$tools/whisper/whisper-cli" ] && [ -f "$tools/whisper/ggml-large-v3-turbo-q5_0.bin" ] && [ -x "$tools/realesrgan/realesrgan-ncnn-vulkan" ]; then break; fi
               if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/sceneshelf-server.log"; exit 1; fi
               sleep 8
             done
             ls -la "$tools"/*/ | head -40
-            "$tools/ffmpeg/ffmpeg" -hide_banner -encoders | grep ' libx264 ' && echo "FFMPEG OK"
+            "$ffmpeg_bin" -hide_banner -encoders | grep ' libx264 ' && echo "FFMPEG OK"
             say -v Yuna "안녕하세요. 오늘은 날씨가 정말 좋네요." -o "$RUNNER_TEMP/ko.aiff"
-            "$tools/ffmpeg/ffmpeg" -hide_banner -loglevel error -y -i "$RUNNER_TEMP/ko.aiff" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/ko.wav"
+            "$ffmpeg_bin" -hide_banner -loglevel error -y -i "$RUNNER_TEMP/ko.aiff" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/ko.wav"
             "$tools/whisper/whisper-cli" -m "$tools/whisper/ggml-large-v3-turbo-q5_0.bin" -f "$RUNNER_TEMP/ko.wav" -l ko -np -t 4 | tee "$RUNNER_TEMP/ko.txt"
             grep -q '날씨' "$RUNNER_TEMP/ko.txt" && echo "WHISPER OK"
-            "$tools/ffmpeg/ffmpeg" -hide_banner -loglevel error -f lavfi -i testsrc=size=64x64 -frames:v 1 -y "$RUNNER_TEMP/in.png"
+            "$ffmpeg_bin" -hide_banner -loglevel error -f lavfi -i testsrc=size=64x64 -frames:v 1 -y "$RUNNER_TEMP/in.png"
             "$tools/realesrgan/realesrgan-ncnn-vulkan" -i "$RUNNER_TEMP/in.png" -o "$RUNNER_TEMP/out.png" -n realesr-animevideov3 -s 2 -m "$tools/realesrgan/models" && file "$RUNNER_TEMP/out.png" | grep -q '128 x 128' && echo "UPSCALE OK"
           fi
       - name: Save installer artifacts
