@@ -25,9 +25,9 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --location --retry 2 --max-time 180 \
-            https://scene-shelf-pc.gooo22.chatgpt.site/SceneShelf-Mac-PKG-BuildKit.zip \
+            https://github.com/y23309257-ai/sceneshelf-mac-build/releases/download/v0.6.3-buildkit/SceneShelf-Mac-PKG-BuildKit.zip \
             -o kit.zip
-          echo 'b9b4545523f9693c2e701a2b10760bfdd11306ea0ff14e1dc4ae23efebd8fd0b  kit.zip' | shasum -a 256 -c -
+          echo 'e9ca4cea3ba85a10c08d4006e02e7d198c37943ecd77cb145b4c6305b6c522a4  kit.zip' | shasum -a 256 -c -
           unzip -q kit.zip
       - name: Build the native installer without interactive prompts
         shell: bash
@@ -65,7 +65,7 @@ jobs:
             if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/sceneshelf-server.log"; exit 1; fi
             sleep 1
           done
-          node --input-type=module -e "import fs from 'node:fs'; const h=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/health.json','utf8')); if(h.app!=='SceneShelf'||h.bridgeVersion!==2) throw Error('Unexpected health response'); console.log('Server health OK');"
+          node --input-type=module -e "import fs from 'node:fs'; const h=JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP+'/health.json','utf8')); if(h.app!=='SceneShelf'||h.bridgeVersion!==2||h.appVersion!=='0.6.3') throw Error('Unexpected health response'); console.log('Server health OK');"
           curl --fail --silent http://127.0.0.1:4398/ | grep -q '<!doctype html>'
           # 0.6.2+: the app downloads its Mac helper tools on first launch (FFmpeg, Whisper, Real-ESRGAN). Check they arrive and run.
           tools="$RUNNER_TEMP/sceneshelf-test-data/tools"
